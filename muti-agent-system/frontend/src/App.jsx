@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { User, MessageSquare, Play, Settings, Sparkles, Film } from 'lucide-react';
+import SceneVisualization from './SceneVisualization';
 
 function App() {
   const [text, setText] = useState('');
@@ -161,23 +162,14 @@ function App() {
                   剧本演绎
                 </h2>
                 
-                <div className="h-64 overflow-y-auto mb-4 space-y-3">
-                  {sceneMessages.map((msg, idx) => (
-                    <div
-                      key={idx}
-                      className="p-3 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50"
-                    >
-                      <div className="font-semibold text-sm text-indigo-600 mb-1">
-                        {msg.character_name}
-                      </div>
-                      <div className="text-gray-800">{msg.content}</div>
-                    </div>
-                  ))}
-                </div>
+                <SceneVisualization 
+                  sceneMessages={sceneMessages} 
+                  characters={characters.map(char => ({ name: char.name }))} 
+                />
                 
                 <button
                   onClick={() => setShowScene(false)}
-                  className="w-full bg-gradient-to-r from-gray-600 to-gray-700 text-white py-2 px-4 rounded-xl font-semibold hover:from-gray-700 hover:to-gray-800 transition-all"
+                  className="w-full bg-gradient-to-r from-gray-600 to-gray-700 text-white py-2 px-4 rounded-xl font-semibold hover:from-gray-700 hover:to-gray-800 transition-all mt-4"
                 >
                   关闭演绎
                 </button>
