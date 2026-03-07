@@ -94,7 +94,7 @@ function SceneVisualization({ sceneMessages, characters }) {
       ref={sceneRef}
       className="relative w-full h-[600px] bg-cover bg-center rounded-2xl overflow-hidden"
       style={{
-        backgroundImage: `url('/town_map.png')`
+        backgroundImage: `url('/background.jpg')`
       }}
     >
       {/* 场景标题 */}
