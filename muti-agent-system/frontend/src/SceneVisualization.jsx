@@ -83,7 +83,9 @@ function SceneVisualization({ sceneMessages, characters }) {
     setCharacterInstances(prev => {
       const updatedCharacters = { ...prev };
       if (updatedCharacters[characterName]) {
-        updatedCharacters[characterName].move(direction);
+        // 传递其他角色信息以检测碰撞
+        const otherCharacters = Object.values(updatedCharacters).filter(char => char.name !== characterName);
+        updatedCharacters[characterName].move(direction, otherCharacters);
       }
       return updatedCharacters;
     });
@@ -92,7 +94,7 @@ function SceneVisualization({ sceneMessages, characters }) {
   return (
     <div 
       ref={sceneRef}
-      className="relative w-full h-[600px] bg-cover bg-center rounded-2xl overflow-hidden"
+      className="relative w-full h-[800px] bg-cover bg-center rounded-2xl overflow-hidden"
       style={{
         backgroundImage: `url('/background.jpg')`
       }}

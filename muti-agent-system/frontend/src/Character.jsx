@@ -12,22 +12,44 @@ class Character {
     this.message = '';
   }
 
-  move(direction) {
+  move(direction, otherCharacters = []) {
+    let newX = this.x;
+    let newY = this.y;
+    
     switch (direction) {
       case 'up':
-        this.y = Math.max(50, this.y - this.speed);
+        newY = Math.max(50, this.y - this.speed);
         break;
       case 'down':
-        this.y = Math.min(500, this.y + this.speed);
+        newY = Math.min(700, this.y + this.speed);
         break;
       case 'left':
-        this.x = Math.max(50, this.x - this.speed);
+        newX = Math.max(50, this.x - this.speed);
         break;
       case 'right':
-        this.x = Math.min(700, this.x + this.speed);
+        newX = Math.min(700, this.x + this.speed);
         break;
       default:
         break;
+    }
+    
+    // 检测碰撞，如果碰撞则不移动
+    let canMove = true;
+    for (const otherChar of otherCharacters) {
+      if (otherChar.name !== this.name) {
+        const distance = Math.sqrt(
+          Math.pow(newX - otherChar.x, 2) + Math.pow(newY - otherChar.y, 2)
+        );
+        if (distance < 50) {
+          canMove = false;
+          break;
+        }
+      }
+    }
+    
+    if (canMove) {
+      this.x = newX;
+      this.y = newY;
     }
   }
 

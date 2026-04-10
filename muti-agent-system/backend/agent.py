@@ -1,8 +1,9 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from models import Character, Message
 from config import Config
 import openai
 import re
+import json
 from datetime import datetime
 from character_analyzer import CharacterAnalyzer
 
@@ -32,7 +33,7 @@ class Agent:
 角色定位：{self.character.role}
 
 请根据角色的性格和背景，自然地回应对话。保持角色一致性，使用符合角色身份的语言风格。"""
-
+    
     async def respond(self, context: str, conversation_history: List[Dict[str, str]] = None) -> str:
         """生成角色回复"""
         if self.client is None:
@@ -76,6 +77,41 @@ class Agent:
             return f"思考了一下，说："
         else:
             return f"说："
+    
+    async def generate_movement(self, context: str) -> Optional[Tuple[float, float]]:
+        """根据剧本内容生成角色移动"""
+        if self.client is None:
+            return None
+        
+        try:
+            # 构建系统提示词
+            system_prompt = f"你是角色移动规划助手。根据剧本内容，为角色 {self.character.name} 生成移动指令。请以 JSON 格式返回：{{\"dx\": 移动距离X, \"dy\": 移动距离Y}}"
+            
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"根据以下剧本内容，为角色 {self.character.name} 生成移动指令：\n{context}"}
+            ]
+            
+            response = await self.client.chat.completions.create(
+                model=Config.OPENAI_MODEL,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=100
+            )
+            
+            result = response.choices[0].message.content
+            result = result.strip()
+            if result.startswith('```'):
+                result = result.split('```')[1]
+                if result.startswith('json'):
+                    result = result[4:]
+            
+            movement = json.loads(result)
+            return (movement.get('dx', 0.0), movement.get('dy', 0.0))
+        
+        except Exception as e:
+            print(f"Error generating movement for {self.character.name}: {e}")
+            return None
 
 
 class AgentOrchestrator:
@@ -86,41 +122,65 @@ class AgentOrchestrator:
     
     async def process_scene(self, script: str, max_turns: int = 5) -> List[Message]:
         """处理剧本场景"""
-        dialogues = self._parse_script(script)
+        scene_elements = self._parse_script(script)
         messages = []
         turn = 0
         
-        for dialogue in dialogues[:max_turns]:
-            character_name = dialogue['character']
-            content = dialogue['content']
+        for element in scene_elements[:max_turns]:
+            element_type = element.get('type')
             
-            if character_name not in self.agents:
-                continue
+            if element_type == 'movement':
+                # 处理移动指令
+                character_name = element.get('character')
+                dx = element.get('dx', 0.0)
+                dy = element.get('dy', 0.0)
+                
+                if character_name in self.characters:
+                    character = self.characters[character_name]
+                    character.move(dx, dy)
+                    
+                    # 检查是否与其他角色相遇
+                    for other_name, other_char in self.characters.items():
+                        if other_name != character_name:
+                            distance = self._calculate_distance(character, other_char)
+                            if distance < 1.0:  # 相遇阈值
+                                # 生成相遇交互
+                                interaction_msg = await self._generate_interaction(character_name, other_name)
+                                if interaction_msg:
+                                    messages.append(interaction_msg)
             
-            agent = self.agents[character_name]
-            response = await agent.respond(content, self.scene_history)
-            
-            turn += 1
-            message = Message(
-                id=f"msg_{turn}",
-                character_id=character_name,
-                character_name=character_name,
-                content=response,
-                action=agent.generate_action(response),
-                timestamp=datetime.now()
-            )
-            messages.append(message)
-            
-            self.scene_history.append({
-                "role": "user",
-                "content": f"{character_name}: {response}"
-            })
+            elif element_type == 'dialogue':
+                # 处理对话
+                character_name = element.get('character')
+                content = element.get('content')
+                
+                if character_name not in self.agents:
+                    continue
+                
+                agent = self.agents[character_name]
+                response = await agent.respond(content, self.scene_history)
+                
+                turn += 1
+                message = Message(
+                    id=f"msg_{turn}",
+                    character_id=character_name,
+                    character_name=character_name,
+                    content=response,
+                    action=agent.generate_action(response),
+                    timestamp=datetime.now()
+                )
+                messages.append(message)
+                
+                self.scene_history.append({
+                    "role": "user",
+                    "content": f"{character_name}: {response}"
+                })
         
         return messages
     
-    def _parse_script(self, script: str) -> List[Dict[str, str]]:
-        """解析剧本"""
-        dialogues = []
+    def _parse_script(self, script: str) -> List[Dict[str, any]]:
+        """解析剧本，支持移动指令和对话"""
+        elements = []
         lines = script.split('\n')
         
         for line in lines:
@@ -128,17 +188,95 @@ class AgentOrchestrator:
             if not line:
                 continue
             
-            # 中文对话模式
-            match = re.match(r'([\u4e00-\u9fa5]{2,4})[：:]\s*(.+)', line)
-            if match:
-                character = match.group(1)
-                content = match.group(2)
-                dialogues.append({
+            # 解析移动指令：角色名 移动 (dx, dy)
+            move_match = re.match(r'([\u4e00-\u9fa5]{2,4})\s*移动\s*\(([^)]+)\)', line)
+            if move_match:
+                character = move_match.group(1)
+                coords = move_match.group(2).split(',')
+                if len(coords) == 2:
+                    try:
+                        dx = float(coords[0].strip())
+                        dy = float(coords[1].strip())
+                        elements.append({
+                            'type': 'movement',
+                            'character': character,
+                            'dx': dx,
+                            'dy': dy
+                        })
+                    except ValueError:
+                        pass
+                continue
+            
+            # 解析对话：角色名: 内容
+            dialogue_match = re.match(r'([\u4e00-\u9fa5]{2,4})[：:]\s*(.+)', line)
+            if dialogue_match:
+                character = dialogue_match.group(1)
+                content = dialogue_match.group(2)
+                elements.append({
+                    'type': 'dialogue',
                     'character': character,
                     'content': content
                 })
         
-        return dialogues
+        return elements
+    
+    def _calculate_distance(self, char1: Character, char2: Character) -> float:
+        """计算两个角色之间的距离"""
+        dx = char1.x - char2.x
+        dy = char1.y - char2.y
+        return (dx**2 + dy**2)**0.5
+    
+    async def _generate_interaction(self, char1_name: str, char2_name: str) -> Optional[Message]:
+        """生成两个角色相遇时的交互"""
+        if char1_name not in self.agents or char2_name not in self.agents:
+            return None
+        
+        char1 = self.characters[char1_name]
+        char2 = self.characters[char2_name]
+        
+        # 生成相遇场景描述
+        context = f"{char1_name} 和 {char2_name} 相遇了。请根据他们的性格和背景，生成一段自然的交互对话。"
+        
+        # 让第一个角色先说话
+        agent1 = self.agents[char1_name]
+        response1 = await agent1.respond(f"你遇到了 {char2_name}，请打招呼。", self.scene_history)
+        
+        turn = len(self.scene_history) + 1
+        message1 = Message(
+            id=f"msg_{turn}",
+            character_id=char1_name,
+            character_name=char1_name,
+            content=response1,
+            action=agent1.generate_action(response1),
+            timestamp=datetime.now()
+        )
+        
+        self.scene_history.append({
+            "role": "user",
+            "content": f"{char1_name}: {response1}"
+        })
+        
+        # 让第二个角色回应
+        agent2 = self.agents[char2_name]
+        response2 = await agent2.respond(f"{char1_name} 对你说：{response1}", self.scene_history)
+        
+        turn += 1
+        message2 = Message(
+            id=f"msg_{turn}",
+            character_id=char2_name,
+            character_name=char2_name,
+            content=response2,
+            action=agent2.generate_action(response2),
+            timestamp=datetime.now()
+        )
+        
+        self.scene_history.append({
+            "role": "user",
+            "content": f"{char2_name}: {response2}"
+        })
+        
+        # 返回第二个消息，因为第一个消息已经添加到场景历史中
+        return message2
     
     async def interactive_session(self, user_input: str, character_name: str) -> Message:
         """交互式对话"""

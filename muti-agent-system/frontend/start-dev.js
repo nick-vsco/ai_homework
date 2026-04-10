@@ -7,17 +7,20 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = resolve(__filename, '..')
 
 async function startDevServer() {
+  // 获取命令行参数指定的端口
+  const port = process.argv[2] || 3000
+  
   const config = {
     root: resolve(__dirname, '.'),
     base: '/',
     logLevel: 'info',
     clearScreen: true,
     server: {
-      port: 3000,
+      port: parseInt(port),
       host: true,
       proxy: {
         '/api': {
-          target: 'http://localhost:5000',
+          target: 'http://localhost:5001',
           changeOrigin: true,
         }
       }
@@ -27,7 +30,7 @@ async function startDevServer() {
   const server = await createServer(config)
   await server.listen()
   
-  console.log('Dev server is running on http://localhost:3000')
+  console.log(`Dev server is running on http://localhost:${port}`)
 }
 
 startDevServer().catch((err) => {

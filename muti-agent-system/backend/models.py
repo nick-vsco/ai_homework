@@ -10,7 +10,23 @@ class Character(BaseModel):
     role: str
     status: str = "idle"
     location: str = "center"
+    x: float = 0.0
+    y: float = 0.0
     emotions: Dict[str, float] = {}
+    
+    def move(self, dx: float, dy: float):
+        """移动角色"""
+        self.x += dx
+        self.y += dy
+    
+    def set_position(self, x: float, y: float):
+        """设置角色位置"""
+        self.x = x
+        self.y = y
+    
+    def get_position(self) -> tuple:
+        """获取角色位置"""
+        return (self.x, self.y)
 
 class Message(BaseModel):
     id: str
