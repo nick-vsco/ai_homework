@@ -81,37 +81,87 @@ class Agent:
     async def generate_movement(self, context: str) -> Optional[Tuple[float, float]]:
         """根据剧本内容生成角色移动"""
         if self.client is None:
-            return None
+            # 如果没有 API 客户端，返回停止移动
+            return (0.0, 0.0)
         
         try:
-            # 构建系统提示词
-            system_prompt = f"你是角色移动规划助手。根据剧本内容，为角色 {self.character.name} 生成移动指令。请以 JSON 格式返回：{{\"dx\": 移动距离X, \"dy\": 移动距离Y}}"
+            # 解析上下文，提取角色位置信息
+            import json
+            try:
+                context_data = json.loads(context)
+            except json.JSONDecodeError:
+                # 如果 context 不是 JSON 字符串，返回停止移动
+                return (0.0, 0.0)
             
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"根据以下剧本内容，为角色 {self.character.name} 生成移动指令：\n{context}"}
-            ]
+            character_pos = context_data.get('character', {})
+            other_characters = context_data.get('otherCharacters', [])
+            actions = context_data.get('actions', [])
             
-            response = await self.client.chat.completions.create(
-                model=Config.OPENAI_MODEL,
-                messages=messages,
-                temperature=0.3,
-                max_tokens=100
-            )
+            # 检查是否有针对该角色的移动操作或对话操作
+            target_character = None
+            movement_type = None
+            for action in actions:
+                if action.get('character') == self.character.name:
+                    if action.get('type') == 'movement':
+                        movement_type = action.get('movement_type')
+                        target_name = action.get('target')
+                        if target_name:
+                            # 查找目标角色
+                            for other_char in other_characters:
+                                if other_char.get('name') == target_name:
+                                    target_character = other_char
+                                    break
+                            if target_character:
+                                break
+                    elif action.get('type') == 'dialogue':
+                        # 对话操作也需要移动到目标角色身边
+                        target_name = action.get('target')
+                        if target_name:
+                            # 查找目标角色
+                            for other_char in other_characters:
+                                if other_char.get('name') == target_name:
+                                    target_character = other_char
+                                    break
+                            if target_character:
+                                break
             
-            result = response.choices[0].message.content
-            result = result.strip()
-            if result.startswith('```'):
-                result = result.split('```')[1]
-                if result.startswith('json'):
-                    result = result[4:]
+            # 如果有目标角色，直接计算移动距离
+            if target_character:
+                char_x = character_pos.get('x', 0)
+                target_x = target_character.get('x', 0)
+                
+                # 计算距离
+                distance = target_x - char_x
+                
+                # 如果距离小于 50，说明已经在身边，不需要移动
+                if abs(distance) < 50:
+                    return (0.0, 0.0)
+                
+                # 计算移动距离，直接移动到目标位置附近
+                # 确保角色不会完全覆盖目标角色，保持 50 像素的距离
+                if distance > 0:
+                    dx = distance - 50  # 向右移动，保持 50 像素的距离
+                else:
+                    dx = distance + 50  # 向左移动，保持 50 像素的距离
+                
+                # 限制移动距离，确保角色不会飞出去
+                dx = max(-150, min(150, dx))
+                return (dx, 0.0)
             
-            movement = json.loads(result)
-            return (movement.get('dx', 0.0), movement.get('dy', 0.0))
+            # 处理散步等小范围移动操作
+            if movement_type and movement_type in ['散步', '走动']:
+                # 生成小范围的随机移动
+                import random
+                dx = (random.random() - 0.5) * 20  # -10 到 10 之间的随机数
+                return (dx, 0.0)
+            
+            # 如果没有明确的移动指令，返回停止移动
+            return (0.0, 0.0)
         
         except Exception as e:
             print(f"Error generating movement for {self.character.name}: {e}")
-            return None
+            # 发生错误时，返回停止移动
+            return (0.0, 0.0)
 
 
 class AgentOrchestrator:
@@ -120,17 +170,72 @@ class AgentOrchestrator:
         self.agents = {c.name: Agent(c) for c in characters}
         self.scene_history = []
     
-    async def process_scene(self, script: str, max_turns: int = 5) -> List[Message]:
-        """处理剧本场景"""
+    async def process_scene(self, script: str, actions: List[Dict] = None, max_turns: int = 10) -> List[Message]:
+        """处理剧本场景，确保对话高度还原剧情"""
         scene_elements = self._parse_script(script)
         messages = []
         turn = 0
+        
+        # 将整个剧本作为上下文，帮助模型理解剧情脉络
+        full_script_context = f"当前正在演绎的剧本内容：\n{script}\n\n"
+        
+        # 处理传入的操作信息
+        if actions:
+            for action in actions:
+                if action.get('type') == 'movement':
+                    character_name = action.get('character')
+                    target = action.get('target')
+                    
+                    if character_name in self.characters and target in self.characters:
+                        # 计算移动距离
+                        character = self.characters[character_name]
+                        target_char = self.characters[target]
+                        
+                        dx = target_char.x - character.x
+                        dy = target_char.y - character.y
+                        
+                        # 确保角色不会完全覆盖目标角色，保持 50 像素的距离
+                        if dx > 0:
+                            dx -= 50
+                        else:
+                            dx += 50
+                        
+                        # 限制移动距离，确保角色不会飞出去
+                        dx = max(-150, min(150, dx))
+                        
+                        character.move(dx, 0.0)
+                elif action.get('type') == 'dialogue':
+                    # 处理对话操作，确保对话之前两个角色是靠近的
+                    character_name = action.get('character')
+                    target = action.get('target')
+                    
+                    if character_name in self.characters and target in self.characters:
+                        # 检查角色是否靠近
+                        character = self.characters[character_name]
+                        target_char = self.characters[target]
+                        distance = self._calculate_distance(character, target_char)
+                        
+                        # 如果距离大于 50，说明角色不靠近，需要移动
+                        if distance > 50:
+                            # 计算移动距离
+                            dx = target_char.x - character.x
+                            
+                            # 确保角色不会完全覆盖目标角色，保持 50 像素的距离
+                            if dx > 0:
+                                dx -= 50
+                            else:
+                                dx += 50
+                            
+                            # 限制移动距离，确保角色不会飞出去
+                            dx = max(-150, min(150, dx))
+                            
+                            character.move(dx, 0.0)
         
         for element in scene_elements[:max_turns]:
             element_type = element.get('type')
             
             if element_type == 'movement':
-                # 处理移动指令
+                # 处理移动指令逻辑保持不变
                 character_name = element.get('character')
                 dx = element.get('dx', 0.0)
                 dy = element.get('dy', 0.0)
@@ -150,15 +255,19 @@ class AgentOrchestrator:
                                     messages.append(interaction_msg)
             
             elif element_type == 'dialogue':
-                # 处理对话
+                # 处理对话：使用更强的提示词确保模型补充和丰富剧情对话
                 character_name = element.get('character')
-                content = element.get('content')
+                dialogue_content = element.get('content')
                 
                 if character_name not in self.agents:
                     continue
                 
                 agent = self.agents[character_name]
-                response = await agent.respond(content, self.scene_history)
+                
+                # 构建更丰富的上下文，要求 AI 补充细节
+                prompt = f"{full_script_context}现在请你扮演角色 {character_name}。根据剧本中的这一行：“{dialogue_content}”，请扩展并演绎出这段对话。你可以增加细节、情感表达或动作描写，但必须严格符合剧本原意。"
+                
+                response = await agent.respond(prompt, self.scene_history)
                 
                 turn += 1
                 message = Message(
@@ -172,7 +281,7 @@ class AgentOrchestrator:
                 messages.append(message)
                 
                 self.scene_history.append({
-                    "role": "user",
+                    "role": "assistant", # 修改为 assistant 更符合对话历史逻辑
                     "content": f"{character_name}: {response}"
                 })
         
