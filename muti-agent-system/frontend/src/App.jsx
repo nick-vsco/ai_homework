@@ -159,9 +159,9 @@ function App() {
                     <button
                       key={char.id}
                       onClick={() => {
-                    setSelectedCharacter(char.name);
-                    setUserMessage('');
-                  }}
+                        setSelectedCharacter(char.name);
+                        setUserMessage('');
+                      }}
                       className={`p-3 rounded-xl text-left transition-all ${
                         selectedCharacter === char.name
                           ? 'bg-blue-100 border-2 border-blue-500'
@@ -173,40 +173,6 @@ function App() {
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {/* 演绎场景 */}
-            {showScene && sceneMessages.length > 0 && (
-              <div className="bg-white rounded-2xl shadow-xl p-6">
-                <h2 className="text-xl font-semibold mb-4 flex items-center">
-                  <Film className="mr-2" />
-                  剧本演绎
-                </h2>
-                
-                <SceneVisualization 
-                  sceneMessages={sceneMessages} 
-                  characters={characters.map(char => ({ name: char.name }))} 
-                  title={sceneTitle}
-                  onCharacterSelect={(characterName) => {
-                    setSelectedCharacter(characterName);
-                    setUserMessage('');
-                  }}
-                  messages={messages}
-                  selectedCharacter={selectedCharacter}
-                  userMessage={userMessage}
-                  setUserMessage={setUserMessage}
-                  handleChat={handleChat}
-                  isProcessing={isProcessing}
-                  actions={actions}
-                />
-                
-                <button
-                  onClick={() => setShowScene(false)}
-                  className="w-full bg-gradient-to-r from-gray-600 to-gray-700 text-white py-2 px-4 rounded-xl font-semibold hover:from-gray-700 hover:to-gray-800 transition-all mt-4"
-                >
-                  关闭演绎
-                </button>
               </div>
             )}
 

@@ -32,7 +32,10 @@ class Agent:
 性格特征：{self.character.personality}
 角色定位：{self.character.role}
 
-请根据角色的性格和背景，自然地回应对话。保持角色一致性，使用符合角色身份的语言风格。"""
+要求：
+1. 保持角色一致性，使用符合角色身份的语言。
+2. 说话要精简，除非必要，否则不要长篇大论。
+3. 直接回答问题或进行对话，不要添加多余的内心独白或环境描写。"""
     
     async def respond(self, context: str, conversation_history: List[Dict[str, str]] = None) -> str:
         """生成角色回复"""
@@ -51,8 +54,8 @@ class Agent:
             response = await self.client.chat.completions.create(
                 model=Config.OPENAI_MODEL,
                 messages=messages,
-                temperature=0.8,
-                max_tokens=150
+                temperature=0.3,  # 降低随机性，使输出更稳定
+                max_tokens=100    # 进一步缩减最大长度
             )
             
             return response.choices[0].message.content
@@ -244,18 +247,18 @@ class AgentOrchestrator:
                     character = self.characters[character_name]
                     character.move(dx, dy)
                     
-                    # 检查是否与其他角色相遇
-                    for other_name, other_char in self.characters.items():
-                        if other_name != character_name:
-                            distance = self._calculate_distance(character, other_char)
-                            if distance < 1.0:  # 相遇阈值
-                                # 生成相遇交互
-                                interaction_msg = await self._generate_interaction(character_name, other_name)
-                                if interaction_msg:
-                                    messages.append(interaction_msg)
+                    # 检查是否与其他角色相遇（已禁用自动交互，以保持对话简洁）
+                    # for other_name, other_char in self.characters.items():
+                    #     if other_name != character_name:
+                    #         distance = self._calculate_distance(character, other_char)
+                    #         if distance < 1.0:  # 相遇阈值
+                    #             # 生成相遇交互
+                    #             interaction_msg = await self._generate_interaction(character_name, other_name)
+                    #             if interaction_msg:
+                    #                 messages.append(interaction_msg)
             
             elif element_type == 'dialogue':
-                # 处理对话：使用更强的提示词确保模型补充和丰富剧情对话
+                # 处理对话：直接使用剧本内容，或者让 AI 进行极简修饰
                 character_name = element.get('character')
                 dialogue_content = element.get('content')
                 
@@ -264,10 +267,24 @@ class AgentOrchestrator:
                 
                 agent = self.agents[character_name]
                 
-                # 构建更丰富的上下文，要求 AI 补充细节
-                prompt = f"{full_script_context}现在请你扮演角色 {character_name}。根据剧本中的这一行：“{dialogue_content}”，请扩展并演绎出这段对话。你可以增加细节、情感表达或动作描写，但必须严格符合剧本原意。"
+                # 修改提示词：要求 AI 极其简洁，优先使用剧本原文
+                prompt = f"""当前剧本上下文：
+{full_script_context}
+
+你现在扮演：{character_name}
+剧本原文内容：“{dialogue_content}”
+
+指令：
+1. 请根据剧本原文进行回应。
+2. 严禁扩展剧情，严禁增加长篇大论。
+3. 如果原文已经是对话，请直接引用或进行极微小的口语化调整。
+4. 字数必须控制在 20 字以内。"""
                 
                 response = await agent.respond(prompt, self.scene_history)
+                
+                # 再次确保长度限制（防止 AI 不听话）
+                if len(response) > 50:
+                    response = response[:47] + "..."
                 
                 turn += 1
                 message = Message(
