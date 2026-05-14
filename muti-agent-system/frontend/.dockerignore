@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+.gitignore
+*.ps1
+*.bat
+*.log
+.DS_Store
