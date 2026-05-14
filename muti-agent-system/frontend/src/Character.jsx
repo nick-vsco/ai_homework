@@ -1,44 +1,54 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+}
+
+const clothingColorOptions = [
+  '#FF6B6B', '#4ECDC4', '#FFD166', '#06D6A0', '#118AB2', 
+  '#073B4C', '#EF476F', '#FF9F1C', '#8AC926', '#1982C4',
+  '#6A4C93', '#FF595E', '#8AC926', '#1982C4', '#6A4C93',
+  '#FFCA3A', '#52B69A', '#34A0A4', '#168AAD', '#1A759F'
+];
+
 class Character {
-  constructor(name, color, x, y) {
+  constructor(name, color, x, y, clothingColorIndex = 0) {
     this.name = name;
     this.color = color;
     this.x = x;
     this.y = y;
     this.vx = 0;
     this.vy = 0;
-    this.speed = 2.5; // 再次减慢一半速度
-    this.jumpForce = -12; // 配合慢速降低跳跃力度
-    this.gravity = 0.4; // 配合慢速减小重力
-    this.groundLevel = 720; // 调低一点点，微调对齐位置
+    this.speed = 2.5 * 1.5;
+    this.jumpForce = -12 * 1.5;
+    this.gravity = 0.4;
+    this.groundLevel = y;
     this.isGrounded = true;
     this.isSpeaking = false;
     this.message = '';
-    this.width = 64;
-    this.height = 128; // 精确计算的高度：48(头) + 52(身) + 28(腿) = 128px
+    this.width = 80 * 1.5;
+    this.height = 160 * 1.5;
     
-    // 冲刺 (Dash) 系统
-    this.canDash = true;
-    this.isDashing = false;
-    this.dashTime = 0;
-    this.dashDuration = 15; // 帧数
-    this.dashSpeed = 12;
-    this.dashCooldown = 0;
-    this.dashCooldownMax = 40; // 帧数
     this.facing = 'right';
     this.isWalking = false;
     this.isJumping = false;
     this.isWaving = false;
-    this.isSitting = false;
-    this.bubbleY = -140; // 默认气泡高度
-    this.zIndexOffset = Math.random() * 10; 
+    this.waveTimer = 0;
+    this.bubbleY = -140;
     
-    // 形象特征：随机生成一些视觉差异
+    const nameHash = hashString(name);
+    this.zIndexOffset = (nameHash % 100) / 10;
+    
     this.style = {
-      hairType: Math.floor(Math.random() * 3), // 0: 短发, 1: 长发, 2: 爆炸头
-      clothingColor: ['#f3f4f6', '#3b82f6', '#ef4444', '#10b981', '#f59e0b'][Math.floor(Math.random() * 5)],
+      hairType: nameHash % 3,
+      clothingColor: clothingColorOptions[clothingColorIndex % clothingColorOptions.length],
       eyeColor: '#374151'
     };
   }
@@ -51,7 +61,7 @@ class Character {
     this.isWalking = false;
     this.isJumping = false;
     this.isWaving = false;
-    this.isSitting = false;
+    this.waveTimer = 0;
     this.isSpeaking = false;
     this.message = '';
     this.facing = 'right';
@@ -59,8 +69,6 @@ class Character {
   }
 
   move(direction) {
-    if (this.isDashing || this.isSitting) return; 
-
     switch (direction) {
       case 'left':
         this.vx = -this.speed;
@@ -82,7 +90,7 @@ class Character {
   }
 
   jump() {
-    if (this.isGrounded && !this.isDashing && !this.isSitting) {
+    if (this.isGrounded) {
       this.vy = this.jumpForce;
       this.isGrounded = false;
       this.isJumping = true;
@@ -91,48 +99,23 @@ class Character {
 
   wave() {
     this.isWaving = true;
-    setTimeout(() => {
-      this.isWaving = false;
-    }, 2000);
-  }
-
-  sit() {
-    this.isSitting = !this.isSitting;
-    if (this.isSitting) {
-      this.vx = 0;
-      this.isWalking = false;
-    }
-  }
-
-  dash() {
-    if (this.canDash && this.dashCooldown <= 0 && !this.isSitting) {
-      this.isDashing = true;
-      this.canDash = false;
-      this.dashTime = this.dashDuration;
-      this.dashCooldown = this.dashCooldownMax;
-      // 冲刺时垂直速度清零，实现短暂悬停感
-      this.vy = 0;
-      // 冲刺方向
-      this.vx = this.facing === 'left' ? -this.dashSpeed : this.dashSpeed;
-    }
+    this.waveTimer = 2000;
   }
 
   update(otherCharacters = []) {
-    // 冲刺计时
-    if (this.isDashing) {
-      this.dashTime--;
-      if (this.dashTime <= 0) {
-        this.isDashing = false;
-        this.vx = 0;
-      }
-    } else {
-      // 正常重力应用
-      if (!this.isGrounded) {
-        this.vy += this.gravity;
+
+    if (this.isWaving && this.waveTimer > 0) {
+      this.waveTimer -= 16;
+      if (this.waveTimer <= 0) {
+        this.isWaving = false;
+        this.waveTimer = 0;
       }
     }
 
-    // 落地检测
+    if (!this.isGrounded) {
+      this.vy += this.gravity;
+    }
+
     if (this.y >= this.groundLevel) {
       this.y = this.groundLevel;
       this.vy = 0;
@@ -140,23 +123,12 @@ class Character {
       this.isJumping = false;
     }
 
-    // 冷却计时
-    if (this.dashCooldown > 0) {
-      this.dashCooldown--;
-    }
-    if (this.isGrounded && this.dashCooldown <= 0) {
-      this.canDash = true;
-    }
-
-    // 更新位置
     let nextX = this.x + this.vx;
     let nextY = this.y + this.vy;
 
-    // 使用动态世界宽度边界
     const currentWorldWidth = this.worldWidth || 5000;
     nextX = Math.max(0, Math.min(currentWorldWidth - this.width, nextX));
 
-    // 地面检测
     if (nextY >= this.groundLevel) {
       nextY = this.groundLevel;
       this.vy = 0;
@@ -170,20 +142,17 @@ class Character {
   }
 
   speak(text, duration = 4000) {
-    // 过滤掉括号内的内容（如：(走进店里...)）以及角色名前缀（如：张三: ）
     let cleanText = text.replace(/\([^)]*\)/g, '').replace(/^[^：:]*[：:]\s*/, '').trim();
     
-    // 如果过滤后没内容了，就保留原样（防止全是动作描述的情况）
     if (!cleanText) cleanText = text;
 
-    // 再次精简：如果文本还是太长（超过60字），进行截断并加省略号
     if (cleanText.length > 60) {
       cleanText = cleanText.substring(0, 57) + '...';
     }
 
     this.isSpeaking = true;
     this.message = cleanText;
-    this.vx = 0; // 说话时停止移动
+    this.vx = 0;
     this.isWalking = false;
     
     if (this.speakTimeout) clearTimeout(this.speakTimeout);
@@ -207,21 +176,28 @@ class Character {
   }
 }
 
-// 角色组件
 const CharacterComponent = ({ character, onClick }) => {
-  // 根据速度计算挤压拉伸 - 仅用于 Y 轴动画
-  const scaleY = character.isDashing ? 0.8 : (character.vy < 0 ? 1.2 : (character.vy > 0 ? 0.9 : 1));
+  const scaleY = character.vy < 0 ? 1.2 : (character.vy > 0 ? 0.9 : 1);
+  const scale = 1.5;
   
-  // 头发样式
   const renderHair = () => {
     switch(character.style.hairType) {
-      case 1: // 长发
-        return <div className="absolute -top-2 -left-1 -right-1 h-6 bg-gray-800 rounded-t-lg z-0" />;
-      case 2: // 爆炸头
-        return <div className="absolute -top-4 -left-2 -right-2 h-8 bg-gray-800 rounded-full z-0" />;
-      default: // 短发
-        return <div className="absolute -top-2 left-0 right-0 h-3 bg-gray-800 rounded-t-sm z-0" />;
+      case 1:
+        return <div style={{ position: 'absolute', top: -8*scale, left: -4*scale, right: -4*scale, height: 24*scale, backgroundColor: '#1f2937', borderRadius: '0.5rem 0.5rem 0 0', zIndex: 0 }} />;
+      case 2:
+        return <div style={{ position: 'absolute', top: -16*scale, left: -8*scale, right: -8*scale, height: 32*scale, backgroundColor: '#1f2937', borderRadius: '9999px', zIndex: 0 }} />;
+      default:
+        return <div style={{ position: 'absolute', top: -8*scale, left: 0, right: 0, height: 12*scale, backgroundColor: '#1f2937', borderRadius: '0.125rem 0.125rem 0 0', zIndex: 0 }} />;
     }
+  };
+
+  const getRightArmRotate = () => {
+    if (character.isWaving && character.waveTimer > 0) {
+      const timeLeft = character.waveTimer;
+      const wavePhase = (2000 - timeLeft) / 1000 * Math.PI * 2;
+      return Math.sin(wavePhase) * 35 - 40;
+    }
+    return -10;
   };
 
   return (
@@ -229,7 +205,7 @@ const CharacterComponent = ({ character, onClick }) => {
       className="absolute cursor-pointer flex flex-col items-center"
       animate={{ 
         x: character.x, 
-        y: character.y - 140, // 减去高度，使 y 坐标对应人物脚部（地面）
+        y: character.y - 140 * scale,
         scaleY: scaleY
       }}
       transition={{ 
@@ -239,8 +215,8 @@ const CharacterComponent = ({ character, onClick }) => {
       }}
       style={{ 
         zIndex: Math.floor(character.y + (character.zIndexOffset || 0)),
-        width: '80px', 
-        height: '140px',
+        width: `${80 * scale}px`, 
+        height: `${140 * scale}px`,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -248,116 +224,229 @@ const CharacterComponent = ({ character, onClick }) => {
       }}
       onClick={onClick}
     >
-      {/* 脚底阴影 - 放在最底层 */}
-      <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-12 h-3 bg-black/20 rounded-full blur-[2px]" />
-
-      <div className="relative w-full flex flex-col items-center">
-        {/* 对话气泡 */}
+      <div style={{ position: 'relative', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         {character.isSpeaking && (
           <motion.div 
             initial={{ opacity: 0, y: 10, scale: 0.5 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            className="absolute z-50 pointer-events-none"
             style={{ 
-              bottom: '100%',
-              marginBottom: '50px', // 增加间距，避免挡住名字
-              left: '50%',
-              transform: `translateX(-50%) translateX(${character.bubbleX || 0}px) translateY(${character.bubbleY || 0}px)`
-            }}
+            position: 'absolute',
+            zIndex: 50,
+            pointerEvents: 'none',
+            bottom: 200*scale,
+            left: `calc(50% - 90px)`
+          }}
           >
-            <div className="relative bg-white text-gray-800 p-3 rounded-2xl border-4 border-gray-800 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] min-w-[120px] max-w-[240px]">
-              <p className="text-sm font-black leading-tight whitespace-normal break-words text-center">
+            <div style={{
+              position: 'relative',
+              backgroundColor: 'white',
+              color: '#1f2937',
+              padding: 12*scale,
+              borderRadius: 16*scale,
+              border: `${4*scale}px solid #1f2937`,
+              boxShadow: `${4*scale}px ${4*scale}px 0px 0px rgba(0,0,0,1)`,
+              minWidth: 120*scale,
+              maxWidth: 240*scale
+            }}>
+              <p style={{ 
+                fontSize: 14*scale, 
+                fontWeight: 900, 
+                lineHeight: 1.25, 
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+                textAlign: 'center'
+              }}>
                 {character.message}
               </p>
-              {/* 小三角 */}
               <div 
-                className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[10px] border-t-gray-800"
                 style={{
-                  left: `calc(50% - ${character.bubbleX || 0}px)`
+                  position: 'absolute',
+                  bottom: -16*scale,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: 0,
+                  height: 0,
+                  borderLeft: `${10*scale}px solid transparent`,
+                  borderRight: `${10*scale}px solid transparent`,
+                  borderTop: `${10*scale}px solid #1f2937`
                 }}
               ></div>
             </div>
           </motion.div>
         )}
-
-        {/* 角色主体 - 彻底禁用 scaleX 动画，改用 rotateY 翻转 */}
         <div 
-          className="relative flex flex-col items-center transition-transform duration-300" 
           style={{ 
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            transition: 'transform 0.3s',
             transform: character.facing === 'left' ? 'rotateY(180deg)' : 'rotateY(0deg)',
             transformStyle: 'preserve-3d'
           }}
         >
-          {/* 头部 */}
-          <div className="relative w-14 h-14 z-10">
+          <div style={{ position: 'relative', width: 56*scale, height: 56*scale, zIndex: 10 }}>
             {renderHair()}
             <div 
-              className="w-full h-full border-4 border-gray-800 bg-[#ffdbac] relative overflow-hidden shadow-inner"
-              style={{ borderRadius: '12% 12% 15% 15%' }}
+              style={{
+                width: '100%',
+                height: '100%',
+                border: `${4*scale}px solid #1f2937`,
+                backgroundColor: '#ffdbac',
+                position: 'relative',
+                overflow: 'hidden',
+                boxShadow: 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.06)',
+                borderRadius: '12% 12% 15% 15%'
+              }}
             >
-              {/* 脸部细节 */}
-              <div className="absolute top-1/2 left-0 right-0 flex justify-around px-2 transform -translate-y-1/2">
-                <div className="w-2.5 h-2.5 bg-gray-800 rounded-full" />
-                <div className="w-2.5 h-2.5 bg-gray-800 rounded-full" />
+              <div style={{
+                position: 'absolute',
+                top: '50%',
+                left: 0,
+                right: 0,
+                display: 'flex',
+                justifyContent: 'space-around',
+                padding: `0 ${8*scale}px`,
+                transform: 'translateY(-50%)'
+              }}>
+                <div style={{ width: 10*scale, height: 10*scale, backgroundColor: '#1f2937', borderRadius: '9999px' }} />
+                <div style={{ width: 10*scale, height: 10*scale, backgroundColor: '#1f2937', borderRadius: '9999px' }} />
               </div>
-              {/* 腮红 */}
-              <div className="absolute top-8 left-1 w-2 h-1 bg-red-300/50 rounded-full" />
-              <div className="absolute top-8 right-1 w-2 h-1 bg-red-300/50 rounded-full" />
+              <div style={{ position: 'absolute', top: 32*scale, left: 4*scale, width: 8*scale, height: 4*scale, backgroundColor: 'rgba(252, 165, 165, 0.5)', borderRadius: '9999px' }} />
+              <div style={{ position: 'absolute', top: 32*scale, right: 4*scale, width: 8*scale, height: 4*scale, backgroundColor: 'rgba(252, 165, 165, 0.5)', borderRadius: '9999px' }} />
             </div>
           </div>
           
-          {/* 身体/衣服 */}
-          <motion.div 
-            className="w-12 border-4 border-gray-800 -mt-1 relative z-0"
-            style={{ 
-              backgroundColor: character.color,
-              borderRadius: '4px 4px 8px 8px'
-            }}
-            animate={character.isSitting ? { height: 35, y: 15 } : { height: 50, y: 0 }}
-          >
-            {/* 领口细节 */}
-            <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-4 h-2 bg-white/30 rounded-b-full" />
-            
-            {/* 手臂 */}
-            <motion.div 
-              className="absolute -right-3 top-2 w-4 h-10 border-4 border-gray-800 rounded-full"
-              style={{ backgroundColor: character.color, originY: 0 }}
-              animate={character.isWaving ? { rotate: [0, -110, -40, -110, 0] } : { rotate: -10 }}
-              transition={{ duration: 1.5, repeat: character.isWaving ? Infinity : 0 }}
-            />
-            <motion.div 
-              className="absolute -left-3 top-2 w-4 h-10 border-4 border-gray-800 rounded-full"
-              style={{ backgroundColor: character.color, originY: 0 }}
-              animate={{ rotate: 10 }}
-            />
-          </motion.div>
+          <div 
+              style={{ 
+                width: 48*scale,
+                height: 50*scale,
+                border: `${4*scale}px solid #1f2937`,
+                marginTop: -4*scale,
+                position: 'relative',
+                zIndex: 0,
+                backgroundColor: character.style.clothingColor,
+                borderRadius: `${4*scale}px ${4*scale}px ${8*scale}px ${8*scale}px`
+              }}
+            >
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 16*scale,
+                height: 8*scale,
+                backgroundColor: 'rgba(255, 255, 255, 0.3)',
+                borderRadius: '0 0 9999px 9999px'
+              }} />
+              
+              <motion.div 
+                style={{
+                  position: 'absolute',
+                  right: -12*scale,
+                  top: 8*scale,
+                  width: 16*scale,
+                  height: 40*scale,
+                  border: `${4*scale}px solid #1f2937`,
+                  borderRadius: '9999px',
+                  backgroundColor: character.style.clothingColor,
+                  transformOrigin: 'top center'
+                }}
+                animate={{ 
+                  rotate: getRightArmRotate()
+                }}
+                transition={{ 
+                  duration: character.isWaving ? 1.5 : 0.3, 
+                  repeat: character.isWaving ? Infinity : 0
+                }}
+              />
+              <motion.div 
+                style={{
+                  position: 'absolute',
+                  left: -12*scale,
+                  top: 8*scale,
+                  width: 16*scale,
+                  height: 40*scale,
+                  border: `${4*scale}px solid #1f2937`,
+                  borderRadius: '9999px',
+                  backgroundColor: character.style.clothingColor,
+                  transformOrigin: 'top center'
+                }}
+                animate={{ 
+                  rotate: 10
+                }}
+                transition={{ duration: 0.3 }}
+              />
+            </div>
 
-          {/* 腿/裤子 */}
-          <div className="flex justify-center gap-1 -mt-1">
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 4*scale, marginTop: -4*scale }}>
+              <motion.div 
+                style={{
+                  width: 20*scale,
+                  height: 28*scale,
+                  backgroundColor: '#374151',
+                  border: `${4*scale}px solid #1f2937`,
+                  borderRadius: `0 0 ${6*scale}px ${6*scale}px`
+                }}
+                animate={{ 
+                  rotate: character.isWalking ? [0, 40, 0, -40, 0] : 0,
+                  height: character.isWalking ? [28*scale, 24*scale, 28*scale] : 28*scale,
+                  originY: 0 
+                }}
+                transition={{ duration: character.isWalking ? 0.6 : 0.3, repeat: character.isWalking ? Infinity : 0 }}
+              />
+              <motion.div 
+                style={{
+                  width: 20*scale,
+                  height: 28*scale,
+                  backgroundColor: '#374151',
+                  border: `${4*scale}px solid #1f2937`,
+                  borderRadius: `0 0 ${6*scale}px ${6*scale}px`
+                }}
+                animate={{ 
+                  rotate: character.isWalking ? [0, -40, 0, 40, 0] : 0,
+                  height: character.isWalking ? [28*scale, 24*scale, 28*scale] : 28*scale,
+                  originY: 0 
+                }}
+                transition={{ duration: character.isWalking ? 0.6 : 0.3, repeat: character.isWalking ? Infinity : 0 }}
+              />
+            </div>
+            
             <motion.div 
-              className="w-5 bg-gray-700 border-4 border-gray-800 rounded-b-md"
-              animate={character.isWalking ? { 
-                rotate: [0, 40, 0, -40, 0],
-                height: [28, 24, 28],
-                originY: 0 
-              } : character.isSitting ? { height: 12, y: -4 } : { rotate: 0, height: character.isGrounded ? 28 : 20 }}
-              transition={character.isWalking ? { duration: 0.6, repeat: Infinity } : {}}
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                borderRadius: '9999px',
+                backgroundColor: 'black',
+                filter: 'blur(2px)'
+              }}
+              animate={{
+                width: 48*scale,
+                height: 3*scale,
+                opacity: 0.2
+              }}
             />
-            <motion.div 
-              className="w-5 bg-gray-700 border-4 border-gray-800 rounded-b-md"
-              animate={character.isWalking ? { 
-                rotate: [0, -40, 0, 40, 0],
-                height: [28, 24, 28],
-                originY: 0 
-              } : character.isSitting ? { height: 12, y: -4 } : { rotate: 0, height: character.isGrounded ? 28 : 20 }}
-              transition={character.isWalking ? { duration: 0.6, repeat: Infinity } : {}}
-            />
-          </div>
         </div>
 
-        {/* 名字标签 */}
         <div 
-          className="absolute -top-12 left-1/2 transform -translate-x-1/2 whitespace-nowrap bg-gray-900/80 text-white px-3 py-1 rounded-full text-sm font-black z-20 border-2 border-white/20 shadow-lg"
+          style={{
+            position: 'absolute',
+            top: -48*scale,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            whiteSpace: 'nowrap',
+            backgroundColor: 'rgba(17, 24, 39, 0.8)',
+            color: 'white',
+            padding: `${4*scale}px ${12*scale}px`,
+            borderRadius: '9999px',
+            fontSize: 14*scale,
+            fontWeight: 900,
+            zIndex: 20,
+            border: `${2*scale}px solid rgba(255,255,255,0.2)`,
+            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)'
+          }}
         >
           {character.name}
         </div>

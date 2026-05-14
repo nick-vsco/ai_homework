@@ -1,0 +1,7 @@
+启动后端命令：
+cd backend
+python app.py
+
+启动前端命令：
+cd frontend
+npm run dev

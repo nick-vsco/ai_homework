@@ -2,17 +2,30 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Character, CharacterComponent } from './Character';
 
-function SceneVisualization({ sceneMessages, characters, title, onCharacterSelect, messages, selectedCharacter, userMessage, setUserMessage, handleChat, isProcessing, actions = [] }) {
+function SceneVisualization({ sceneMessages, characters, title, onCharacterSelect, messages, selectedCharacter, userMessage, setUserMessage, handleChat, isProcessing, actions = [], scriptText = '', onContinueDeduction = null }) {
   const [characterInstances, setCharacterInstances] = useState({});
   const [currentMessage, setCurrentMessage] = useState(null);
   const [messageIndex, setMessageIndex] = useState(0);
   const [showSmallDialog, setShowSmallDialog] = useState(false);
   const [clickedCharacter, setClickedCharacter] = useState(null);
+  const [dialogPositions, setDialogPositions] = useState({
+    ended: { x: 0, y: 0 },
+    generating: { x: 0, y: 0 },
+    continuation: { x: 0, y: 0 },
+    chat: { x: 0, y: 0 }
+  });
   const [targetPositions, setTargetPositions] = useState({});
   const [isDeductionEnded, setIsDeductionEnded] = useState(false);
   const [isPerforming, setIsPerforming] = useState(false);
   const [isDeductionStarted, setIsDeductionStarted] = useState(false);
   const [performanceIndex, setPerformanceIndex] = useState(0);
+  const [showEnded, setShowEnded] = useState(true);
+  const [showGenerating, setShowGenerating] = useState(false);
+  const [showContinuation, setShowContinuation] = useState(false);
+  const [continuation, setContinuation] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isContinuingDeduction, setIsContinuingDeduction] = useState(false);
+  const isContinuingDeductionRef = useRef(false);
   const performanceIndexRef = useRef(0);
   const characterPositionsRef = useRef({});
   const activeTimersRef = useRef([]);
@@ -30,18 +43,72 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
     activeTimersRef.current.forEach(timer => clearTimeout(timer));
     activeTimersRef.current = [];
   };
+  
+  const handleYesContinue = () => {
+    setShowEnded(false);
+    setShowGenerating(true);
+    handleGenerateContinuation();
+  };
+  
+  const handleNoContinue = () => {
+    setShowEnded(false);
+  };
+  
+  const handleGenerateContinuation = async () => {
+    setIsGenerating(true);
+    try {
+      const response = await fetch('http://localhost:5001/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'generate_continuation',
+          script: scriptText,
+          current_messages: sceneMessages,
+          characters: characters
+        }),
+      });
+      
+      const data = await response.json();
+      setContinuation(data.continuation);
+      setShowGenerating(false);
+      setShowContinuation(true);
+    } catch (error) {
+      console.error('生成后续剧本失败:', error);
+      setContinuation('生成功能暂时不可用，请稍后再试。');
+      setShowGenerating(false);
+      setShowContinuation(true);
+    }
+    setIsGenerating(false);
+  };
+  
+  const handleDeductContinuation = async () => {
+    if (onContinueDeduction && continuation) {
+      setIsContinuingDeduction(true);
+      isContinuingDeductionRef.current = true;
+      setShowContinuation(false);
+      setShowGenerating(true);
+      setIsDeductionEnded(false);
+      // 先调用 onContinueDeduction 让 App 更新 actions
+      await onContinueDeduction(continuation);
+      setShowGenerating(false);
+      // 延迟一下让 actions 更新完毕，然后自动开始
+      setTimeout(() => {
+        startPerformance();
+      }, 200);
+    }
+  };
+  
   const initialCharacterStateRef = useRef({});
   const isMovingRef = useRef({});
   const activeParticipantsRef = useRef([]); // 记录当前正在互动的角色
   
   // 背景配置：批量添加不同的背景图
   const backgrounds = [
-    '/background.jpg', 
-    '/background2.jpg',
+    '/background.png',
   ];
-  const bgWidth = 2000; // 每张背景图占据的宽度
+  const bgWidth = 2560; // 16:9 比例的宽度
   const worldWidth = backgrounds.length * bgWidth;
-  const screenWidth = 1400;
+  const screenWidth = 2560;
 
   const instancesRef = useRef({});
   const messageIndexRef = useRef(0);
@@ -77,23 +144,25 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
     '钱七': '#1A535C',
   };
 
-  // 初始化角色实例
+  const hasInitializedRef = useRef(false);
+  // 初始化角色实例 - 只初始化一次
   useEffect(() => {
-    if (characters && characters.length > 0) {
+    if (characters && characters.length > 0 && !hasInitializedRef.current) {
       const initialCharacters = {};
       const initialTargets = {};
       characters.forEach((char, index) => {
         const color = characterColors[char.name] || '#9B5DE5';
-        const initialX = 150 + index * 200;
+        const initialX = 300 + index * 300;
         initialCharacters[char.name] = new Character(
           char.name,
           color,
           initialX,
-          720 // 地面高度
+          800, // 地面高度调整
+          index // 衣服颜色索引，确保每个角色不同
         );
         initialTargets[char.name] = {
           x: initialX,
-          y: 720
+          y: 800
         };
       });
       setCharacterInstances(initialCharacters);
@@ -103,6 +172,7 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
         instances: initialCharacters,
         targets: initialTargets
       };
+      hasInitializedRef.current = true;
     }
   }, [characters]);
 
@@ -111,11 +181,14 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
     isPerformingRef.current = isPerforming;
   }, [isPerforming]);
 
+
+
   // 执行动作序列
   const executeNextAction = async () => {
     if (performanceIndexRef.current >= actions.length) {
       setIsPerforming(false);
       setIsDeductionEnded(true);
+      setShowEnded(true);
       // 表演结束时，缩短保留时间到 2 秒，并确保状态更新
       addTimer(() => {
         if (!isPerformingRef.current) { 
@@ -178,10 +251,8 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
           }, 2000);
         }
       } else if (action.type === 'gesture') {
-        if (action.gesture_type === 'sit') char.sit();
-        else if (action.gesture_type === 'wave') char.wave();
+        if (action.gesture_type === 'wave') char.wave();
         else if (action.gesture_type === 'jump') char.jump();
-        else if (action.gesture_type === 'stand' && char.isSitting) char.sit();
         
         addTimer(() => {
           performanceIndexRef.current += 1;
@@ -308,20 +379,19 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
     // 1. 清除所有正在运行的定时器，防止逻辑冲突
     clearAllTimers();
 
-    // 2. 重置所有角色状态（位置、气泡、动作）
-    if (initialCharacterStateRef.current && initialCharacterStateRef.current.instances) {
+    // 2. 只有首次演绎时才重置角色位置，继续演绎时保持当前位置
+    if (!isContinuingDeductionRef.current && initialCharacterStateRef.current && initialCharacterStateRef.current.instances) {
       const initialTargets = initialCharacterStateRef.current.targets;
       
       setCharacterInstances(prev => {
         const updated = {};
-        // 重新创建实例或重置现有实例，确保位置回到初始点
         Object.keys(prev).forEach((name, index) => {
           const char = prev[name];
-          const initialX = 150 + index * 200; // 对应初始化时的逻辑
+          const initialX = 300 + index * 300;
           
           if (char.stopSpeaking) char.stopSpeaking();
           char.x = initialX;
-          char.y = 720;
+          char.y = 800;
           char.isSitting = false;
           char.isWalking = false;
           char.vx = 0;
@@ -330,27 +400,37 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
         return { ...updated };
       });
 
-      // 同步重置目标位置，防止角色立即走回原来的地方
       const resetTargets = {};
       Object.keys(initialCharacterStateRef.current.targets).forEach((name, index) => {
-        resetTargets[name] = { x: 150 + index * 200, y: 720 };
+        resetTargets[name] = { x: 300 + index * 300, y: 800 };
       });
       setTargetPositions(resetTargets);
     }
 
-    // 3. 彻底重置所有进度索引
-    performanceIndexRef.current = 0;
-    setPerformanceIndex(0);
-    messageIndexRef.current = 0;
-    setMessageIndex(0);
-    activeParticipantsRef.current = [];
-    setCurrentMessage(null);
+    // 3. 只有首次演绎时才重置进度索引，继续演绎时从新动作开始
+    if (!isContinuingDeductionRef.current) {
+      performanceIndexRef.current = 0;
+      setPerformanceIndex(0);
+      messageIndexRef.current = 0;
+      setMessageIndex(0);
+      activeParticipantsRef.current = [];
+      setCurrentMessage(null);
+    } else {
+      // 继续演绎时，重置索引从新动作开始
+      performanceIndexRef.current = 0;
+      setPerformanceIndex(0);
+    }
     
     setIsDeductionStarted(true);
     setIsDeductionEnded(false);
     setIsPerforming(true);
+    setShowEnded(false);
+    setShowGenerating(false);
+    setShowContinuation(false);
     
-    // 移除这里的 advanceDialogue(true)，改为在 executeNextAction 中同步
+    // 重置继续演绎标志
+    setIsContinuingDeduction(false);
+    isContinuingDeductionRef.current = false;
   };
 
   // 播放场景对话逻辑
@@ -673,7 +753,7 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
                   ...prevTargets,
                   [characterName]: { x: Math.max(100, Math.min(worldWidth - 100, escapeX)), y: 720 }
                 }));
-                targetPos = { x: escapeX, y: 720 };
+                targetPos = { x: escapeX, y: 730 };
               }
             }
 
@@ -725,7 +805,7 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
                       if (!currentTarget || Math.abs(currentTarget.x - charCopy.x) < 50) {
                         return {
                           ...prevTargets,
-                          [characterName]: { x: escapeX, y: 720 }
+                          [characterName]: { x: escapeX, y: 730 }
                         };
                       }
                       return prevTargets;
@@ -828,83 +908,177 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
 
   return (
     <div 
-      className="relative w-full h-[800px] rounded-2xl overflow-hidden border-4 border-gray-800 shadow-2xl bg-slate-900"
+      className="relative w-full h-[900px] rounded-3xl overflow-hidden border-8 border-gray-800 shadow-2xl"
     >
       {/* 远景层 (Parallax Far) - 批量渲染且移动速度较慢 */}
       <div 
-        className="absolute inset-0 w-full h-full pointer-events-none opacity-40 brightness-50 flex"
+        className="absolute inset-0 w-full h-full pointer-events-none opacity-40 brightness-50"
       >
-        {backgrounds.map((bg, index) => (
-          <div 
-            key={`far-${index}`}
-            className="h-full flex-shrink-0"
-            style={{
-              backgroundImage: `url('${bg}')`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              width: `${bgWidth}px`,
-              filter: 'blur(2px)'
-            }}
-          />
-        ))}
+        <div 
+          className="w-full h-full"
+          style={{
+            backgroundImage: `url('${backgrounds[0]}')`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center bottom',
+            backgroundRepeat: 'no-repeat'
+          }}
+        />
       </div>
 
       {/* 近景层 (Background) - 批量拼接排列 */}
       <div 
-        className="absolute inset-0 w-full h-full pointer-events-none flex"
+        className="absolute inset-0 w-full h-full pointer-events-none"
       >
-        {backgrounds.map((bg, index) => (
-          <div 
-            key={`near-${index}`}
-            className="h-full flex-shrink-0"
-            style={{
-              backgroundImage: `url('${bg}')`,
-              backgroundSize: '100% 100%',
-              backgroundPosition: 'bottom',
-              width: `${bgWidth}px`
-            }}
-          />
-        ))}
+        <div 
+          className="w-full h-full"
+          style={{
+            backgroundImage: `url('${backgrounds[0]}')`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center bottom',
+            backgroundRepeat: 'no-repeat'
+          }}
+        />
       </div>
 
-      {/* 演绎结束提示 - 只有在开始过且真正结束时才显示 */}
-      {isDeductionStarted && isDeductionEnded && !isPerforming && (
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[100]">
-          <div className="bg-black/90 text-white px-10 py-6 rounded-2xl shadow-2xl border-4 border-yellow-400 animate-in zoom-in duration-300">
-            <h1 className="text-5xl font-black text-center mb-2">🎬 演绎结束</h1>
-            <p className="text-yellow-400 text-center font-bold">所有剧本动作已表演完毕</p>
+      {/* 演绎结束提示 - 询问是否继续 */}
+      {isDeductionStarted && isDeductionEnded && !isPerforming && showEnded && !showGenerating && !showContinuation && (
+        <div style={{ position: 'fixed', top: 0, left: 0, zIndex: 9999, width: '100%', height: '100%', pointerEvents: 'none' }}>
+          <motion.div
+            drag
+            dragMomentum={false}
+            dragElastic={0}
+            style={{ position: 'absolute', top: '50%', left: '50%', pointerEvents: 'auto' }}
+          >
+            <div className="bg-black/90 text-white px-10 py-6 rounded-3xl shadow-2xl border-6 border-yellow-400 animate-in zoom-in duration-300 cursor-move" style={{ transform: 'translate(-50%, -50%)' }}>
+              <h1 className="text-4xl font-black text-center mb-3">🎬 演绎结束</h1>
+              <p className="text-yellow-400 text-center font-bold text-xl mb-5">所有剧本动作已表演完毕</p>
+              <h2 className="text-2xl font-bold text-center text-white mb-6">是否继续预测生成接下来的剧情？</h2>
+              <div className="flex justify-center gap-5">
+                <button
+                  onClick={handleNoContinue}
+                  className="bg-gray-500 text-white px-8 py-4 rounded-2xl font-black text-xl hover:bg-gray-600 transition-all border-3 border-white"
+                >
+                  不了
+                </button>
+                <button
+                  onClick={handleYesContinue}
+                  className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-8 py-4 rounded-2xl font-black text-xl hover:from-purple-700 hover:to-pink-700 transition-all border-3 border-white"
+                >
+                  是
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* 正在生成中 */}
+      {showGenerating && (
+        <div style={{ position: 'fixed', top: 0, left: 0, zIndex: 9999, width: '100%', height: '100%', pointerEvents: 'none' }}>
+          <motion.div
+            drag
+            dragMomentum={false}
+            dragElastic={0}
+            style={{ position: 'absolute', top: '50%', left: '50%', pointerEvents: 'auto' }}
+          >
+            <div className="bg-black/90 text-white px-10 py-6 rounded-3xl shadow-2xl border-6 border-yellow-400 animate-in zoom-in duration-300 cursor-move" style={{ transform: 'translate(-50%, -50%)' }}>
+            <div className="text-center">
+              <div className="text-5xl animate-bounce mb-4">🔮</div>
+              <h2 className="text-3xl font-black mb-3">请稍后</h2>
+              <p className="text-xl text-yellow-400">正在生成后续剧情...</p>
+            </div>
           </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* 展示生成的剧本并询问是否演绎 */}
+      {showContinuation && (
+        <div style={{ position: 'fixed', top: 0, left: 0, zIndex: 9999, width: '100%', height: '100%', pointerEvents: 'none' }}>
+          <motion.div
+            drag
+            dragMomentum={false}
+            dragElastic={0}
+            style={{ position: 'absolute', top: '50%', left: '50%', pointerEvents: 'auto' }}
+          >
+            <div className="bg-white px-6 py-4 rounded-2xl shadow-2xl border-4 border-green-500 max-w-xl animate-in zoom-in duration-300 cursor-move" style={{ transform: 'translate(-50%, -50%)' }}>
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-2xl font-black text-green-600 flex items-center gap-2">
+                <span>✨</span> 生成的后续剧本
+              </h2>
+              <button
+                onClick={() => setShowContinuation(false)}
+                className="text-gray-500 hover:text-red-500 font-black text-3xl"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="bg-gray-50 p-3 rounded-xl border-2 border-gray-200 mb-4 max-h-[180px] overflow-y-auto">
+              <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                {continuation}
+              </p>
+            </div>
+            <h3 className="text-lg font-bold text-center text-gray-700 mb-4">是否要演绎这个剧本？</h3>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => setShowContinuation(false)}
+                className="bg-gray-500 text-white px-5 py-3 rounded-xl font-black text-lg hover:bg-gray-600 transition-all border-2 border-gray-300"
+              >
+                否
+              </button>
+              <button
+                onClick={handleDeductContinuation}
+                disabled={isGenerating}
+                className="bg-gradient-to-r from-green-600 to-teal-600 text-white px-5 py-3 rounded-xl font-black text-lg hover:from-green-700 hover:to-teal-700 transition-all disabled:opacity-50 border-2 border-white"
+              >
+                是
+              </button>
+              <button
+                onClick={async () => {
+                  setShowContinuation(false);
+                  setShowGenerating(true);
+                  await handleGenerateContinuation();
+                }}
+                disabled={isGenerating}
+                className="bg-blue-600 text-white px-5 py-3 rounded-xl font-black text-lg hover:bg-blue-700 transition-all disabled:opacity-50 border-2 border-white"
+              >
+                重新生成
+              </button>
+            </div>
+          </div>
+          </motion.div>
         </div>
       )}
       
       {/* 顶部控制栏 */}
-      <div className="absolute top-6 left-6 right-6 flex justify-between items-start z-50 pointer-events-none">
-        <div className="flex flex-col gap-4 pointer-events-auto">
-          <div className="bg-white px-6 py-3 rounded-2xl border-4 border-gray-800 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-xl font-black text-gray-800 flex items-center gap-2">
-              <span className="text-2xl">🎬</span> {title || '星空冒险'}
+      <div className="absolute top-10 left-10 right-10 flex justify-between items-start z-50 pointer-events-none">
+        <div className="flex flex-col gap-6 pointer-events-auto">
+          <div className="bg-white px-9 py-5 rounded-3xl border-7 border-gray-800 shadow-[7px_7px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-4xl font-black text-gray-800 flex items-center gap-4">
+              <span className="text-5xl">🎬</span> {title || '星空冒险'}
             </h2>
           </div>
-          <div className="flex gap-2">
-            {actions.length > 0 && (
+          <div className="flex gap-4">
               <button
                 onClick={startPerformance}
                 disabled={isPerforming}
-                className={`px-6 py-3 rounded-2xl border-4 border-gray-800 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] font-black flex items-center gap-2 transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none ${
+                className={`px-9 py-5 rounded-3xl border-7 border-gray-800 shadow-[7px_7px_0px_0px_rgba(0,0,0,1)] font-black flex items-center gap-4 transition-all active:translate-x-[4px] active:translate-y-[4px] active:shadow-none text-2xl ${
                   isPerforming ? 'bg-gray-200 text-gray-400' : 'bg-yellow-400 text-gray-800 hover:bg-yellow-300'
                 }`}
               >
                 <span>{isPerforming ? '🎭 表演中...' : '▶️ 开始表演'}</span>
               </button>
-            )}
             <button 
-              className="bg-white px-6 py-3 rounded-2xl border-4 border-gray-800 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] font-black flex items-center gap-2 hover:bg-gray-100 transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+              className="bg-white px-9 py-5 rounded-3xl border-7 border-gray-800 shadow-[7px_7px_0px_0px_rgba(0,0,0,1)] font-black flex items-center gap-4 hover:bg-gray-100 transition-all active:translate-x-[4px] active:translate-y-[4px] active:shadow-none text-2xl"
               onClick={() => {
                 // 1. 立即停止所有计时器和异步任务
                 clearAllTimers();
                 setIsPerforming(false);
                 setIsDeductionStarted(false);
                 setIsDeductionEnded(false);
+                setShowEnded(false);
+                setShowGenerating(false);
+                setShowContinuation(false);
                 performanceIndexRef.current = 0;
                 setPerformanceIndex(0);
                 messageIndexRef.current = 0;
@@ -946,9 +1120,19 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
       </div>
         
       {/* 底部提示栏 */}
-      <div className="absolute bottom-6 right-6 flex flex-col items-end gap-2 z-50 pointer-events-none">
-        <div className="bg-black bg-opacity-70 text-white p-2 px-4 rounded-lg border-2 border-white shadow-lg pointer-events-auto">
-          <p className="text-xs font-bold flex items-center gap-2">
+      <div style={{ 
+        position: 'absolute', 
+        bottom: 10, 
+        right: 10, 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'flex-end', 
+        gap: '16px', 
+        zIndex: 50, 
+        pointerEvents: 'none' 
+      }}>
+        <div className="bg-black bg-opacity-70 text-white p-4 px-8 rounded-xl border-4 border-white shadow-lg pointer-events-auto">
+          <p className="text-xl font-bold flex items-center gap-3">
             <span className="animate-pulse">🖱️</span> 点击角色进行实时对话
           </p>
         </div>
@@ -969,33 +1153,48 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
 
       {/* 小对话框 - 聊天界面 */}
       {showSmallDialog && clickedCharacter && (
-        <div className="absolute top-28 right-8 bg-white p-4 rounded-xl border-4 border-gray-800 w-[320px] z-[60] shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] animate-in fade-in slide-in-from-right-4 duration-300">
-          <div className="flex items-center justify-between mb-2 border-b-4 border-gray-800 pb-2">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded border-2 border-gray-800" style={{ backgroundColor: characterColors[clickedCharacter] || '#9B5DE5' }}></div>
-              <span className="font-black text-sm text-gray-800">与 {clickedCharacter} 交流</span>
+        <div style={{ position: 'fixed', top: 0, left: 0, zIndex: 60, width: '100%', height: '100%', pointerEvents: 'none' }}>
+          <motion.div
+            drag
+            dragMomentum={false}
+            dragElastic={0}
+            style={{ position: 'absolute', top: '24px', right: '24px', pointerEvents: 'auto' }}
+          >
+            <div style={{
+              backgroundColor: 'white',
+              padding: '24px',
+              borderRadius: '1.5rem',
+              border: '8px solid #1f2937',
+              width: '560px',
+              animation: 'fadeIn 0.3s ease-in-out',
+              cursor: 'move'
+            }}>
+          <div className="flex items-center justify-between mb-3 border-b-6 border-gray-800 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl border-4 border-gray-800" style={{ backgroundColor: characterColors[clickedCharacter] || '#9B5DE5' }}></div>
+              <span className="font-black text-xl text-gray-800">与 {clickedCharacter} 交流</span>
             </div>
             <button 
               onClick={() => setShowSmallDialog(false)}
-              className="text-gray-500 hover:text-red-500 font-bold"
+              className="text-gray-500 hover:text-red-500 font-black text-2xl"
             >
               ✕
             </button>
           </div>
           
-          <div className="bg-gray-100 p-2 rounded-lg border-2 border-gray-800 mb-3 h-[200px] overflow-y-auto flex flex-col gap-2">
+          <div className="bg-gray-100 p-3 rounded-2xl border-4 border-gray-800 mb-4 h-[280px] overflow-y-auto flex flex-col gap-3">
             {(!messages[clickedCharacter] || messages[clickedCharacter].length === 0) ? (
-              <div className="text-center text-gray-400 mt-10 text-xs italic">
+              <div className="text-center text-gray-400 mt-16 text-sm italic">
                 点击下方发送消息...
               </div>
             ) : (
               messages[clickedCharacter].map((msg, idx) => (
                 <div
                   key={idx}
-                  className={`max-w-[85%] p-2 rounded-lg text-xs font-bold border-2 border-gray-800 ${
+                  className={`max-w-[85%] p-3 rounded-2xl text-sm font-bold border-4 border-gray-800 ${
                     msg.character_name === '用户' 
-                    ? 'bg-yellow-200 self-end rounded-br-none shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]' 
-                    : 'bg-white self-start rounded-bl-none shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
+                    ? 'bg-yellow-200 self-end rounded-br-none' 
+                    : 'bg-white self-start rounded-bl-none'
                   }`}
                 >
                   <div className="text-gray-800">{msg.content}</div>
@@ -1004,23 +1203,25 @@ function SceneVisualization({ sceneMessages, characters, title, onCharacterSelec
             )}
           </div>
           
-          <div className="flex gap-2">
+          <div className="flex gap-3">
             <input
               type="text"
               value={userMessage}
               onChange={(e) => setUserMessage(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleChat()}
               placeholder="说点什么..."
-              className="flex-1 p-2 border-2 border-gray-800 rounded-lg focus:bg-yellow-50 outline-none text-xs font-bold"
+              className="flex-1 p-3 border-4 border-gray-800 rounded-xl focus:bg-yellow-50 outline-none text-base font-bold"
             />
             <button
               onClick={handleChat}
               disabled={!userMessage.trim() || isProcessing}
-              className="bg-blue-500 text-white px-3 py-1 rounded-lg border-2 border-gray-800 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] font-black hover:bg-blue-400 disabled:opacity-50 text-xs"
+              className="bg-blue-500 text-white px-6 py-3 rounded-xl border-4 border-gray-800 font-black hover:bg-blue-400 disabled:opacity-50 text-base"
             >
               {isProcessing ? '...' : '发送'}
             </button>
           </div>
+          </div>
+          </motion.div>
         </div>
       )}
 

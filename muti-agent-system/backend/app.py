@@ -7,24 +7,40 @@ from agent import AgentOrchestrator, Agent
 app = Flask(__name__)
 CORS(app)
 
-@app.route('/api/health', methods=['GET'])
+@app.route('/api/health', methods=['GET', 'POST'])
 def health():
+    if request.method == 'POST':
+        return jsonify({
+            'continuation': '测试响应：角色们继续对话，剧情发展中...'
+        })
     return jsonify({'status': 'ok'})
+
+@app.route('/api/generate_continuation', methods=['POST'])
+def generate_continuation_simple():
+    return jsonify({
+        'continuation': '测试响应成功！'
+    })
+
+@app.route('/api/test', methods=['POST'])
+def test():
+    return jsonify({
+        'continuation': '测试响应：角色们继续对话，剧情发展中...'
+    })
 
 @app.route('/api/characters/extract', methods=['POST'])
 def extract_characters():
-    # 从请求中获取文本
     data = request.json
-    text = data.get('text', '')
     
-    # 使用 CharacterAnalyzer 从文本中提取角色和操作
+    if data and data.get('type') == 'generate_continuation':
+        return jsonify({
+            'continuation': '测试响应：角色们继续对话，剧情发展中...'
+        })
+    
+    text = data.get('text', '')
     analyzer = CharacterAnalyzer()
     result = analyzer.extract_characters(text)
-    
-    # 将角色转换为字典列表
     characters = result.get('characters', [])
     actions = result.get('actions', [])
-    
     characters_dict = []
     for char in characters:
         characters_dict.append({
@@ -37,8 +53,6 @@ def extract_characters():
             'location': char.location,
             'emotions': char.emotions
         })
-    
-    # 返回角色列表和操作列表
     return jsonify({
         'characters': characters_dict,
         'actions': actions,
@@ -52,18 +66,15 @@ def direct_scene():
     characters_data = data.get('characters', [])
     actions = data.get('actions', [])
     
-    # 创建角色对象列表
     characters = []
     for char_data in characters_data:
         characters.append(Character(**char_data))
     
-    # 使用 AgentOrchestrator 处理剧本演绎请求
     orchestrator = AgentOrchestrator(characters)
     
     import asyncio
     messages = asyncio.run(orchestrator.process_scene(script, actions))
     
-    # 使用 DeepSeek 生成剧本标题
     scene_title = "未命名剧本"
     if script:
         try:
@@ -83,15 +94,12 @@ def direct_scene():
                 temperature=0.7
             )
             scene_title = response.choices[0].message.content.strip()
-            # 去除可能的引号和修饰
             scene_title = scene_title.replace('"', '').replace('《', '').replace('》', '').replace('剧本标题：', '').replace('标题：', '')
-            # 加上一个精致的装饰前缀
             scene_title = f"🎬 {scene_title}"
         except Exception as e:
             print(f"Error generating scene title: {e}")
-            scene_title = "🎬 星空冒险" # 降级默认值
+            scene_title = "🎬 星空冒险"
     
-    # 将消息转换为字典列表
     messages_dict = []
     for msg in messages:
         messages_dict.append({
@@ -104,7 +112,6 @@ def direct_scene():
             'action': msg.action
         })
     
-    # 返回演绎结果
     return jsonify({
         'messages': messages_dict,
         'count': len(messages_dict),
@@ -114,22 +121,26 @@ def direct_scene():
 @app.route('/api/chat', methods=['POST'])
 def chat():
     data = request.json
+    print(f"DEBUG: Received data: {data}")
+    print(f"DEBUG: Type: {type(data)}")
+    
+    if data and isinstance(data, dict) and data.get('type') == 'generate_continuation':
+        print(f"DEBUG: Found generate_continuation request")
+        return generate_continuation(data)
+    
     user_input = data.get('message', '')
     character_name = data.get('character', '')
     characters_data = data.get('characters', [])
     
-    # 创建角色对象列表
     characters = []
     for char_data in characters_data:
         characters.append(Character(**char_data))
     
-    # 使用 AgentOrchestrator 处理聊天请求
     orchestrator = AgentOrchestrator(characters)
     
     import asyncio
     message = asyncio.run(orchestrator.interactive_session(user_input, character_name))
     
-    # 将消息转换为字典
     message_dict = {
         'id': message.id,
         'character_id': message.character_id,
@@ -140,26 +151,97 @@ def chat():
         'action': message.action
     }
     
-    # 返回聊天回复
     return jsonify(message_dict)
+
+def generate_continuation(data):
+    """生成剧情延续的核心逻辑"""
+    try:
+        from config import Config
+        import openai
+        
+        script = data.get('script', '')
+        current_messages = data.get('current_messages', [])
+        characters = data.get('characters', [])
+        
+        print(f"DEBUG: Config.OPENAI_API_KEY = {Config.OPENAI_API_KEY[:10]}...")
+        print(f"DEBUG: Config.OPENAI_BASE_URL = {Config.OPENAI_BASE_URL}")
+        print(f"DEBUG: Config.OPENAI_MODEL = {Config.OPENAI_MODEL}")
+        
+        client = openai.OpenAI(
+            api_key=Config.OPENAI_API_KEY,
+            base_url=Config.OPENAI_BASE_URL
+        )
+        
+        characters_info = ""
+        for char in characters:
+            characters_info += f"- {char.get('name', '')}: {char.get('description', '')}, 性格：{char.get('personality', '')}\n"
+        
+        current_dialogue = ""
+        for msg in current_messages:
+            current_dialogue += f"{msg.get('character_name', '')}: {msg.get('content', '')}\n"
+        
+        prompt = f"""你是一个专业的编剧和剧情续写专家。请根据以下信息生成合理的剧情延续。
+
+剧本原文：
+{script}
+
+当前对话内容：
+{current_dialogue}
+
+角色信息：
+{characters_info}
+
+请生成接下来的剧情发展，要求：
+1. 剧情要合理，符合角色性格
+2. 包含角色间的对话和互动
+3. 格式为：角色名: 对话内容
+4. 内容长度适中，约 300-500 字
+5. 只返回剧情内容，不要有其他说明文字"""
+
+        print("DEBUG: Calling DeepSeek API...")
+        response = client.chat.completions.create(
+            model=Config.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": "你是一个专业的编剧和剧情续写专家。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=800
+        )
+        print("DEBUG: API call successful!")
+        
+        continuation = response.choices[0].message.content.strip()
+        
+        return jsonify({
+            'continuation': continuation
+        })
+        
+    except Exception as e:
+        print(f"Error generating continuation: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'continuation': f'API调用失败：{str(e)}\n\n请检查：\n1. API Key是否有效\n2. 网络连接是否正常\n3. 账户是否有余额'
+        })
 
 @app.route('/api/agent/movement', methods=['POST'])
 def agent_movement():
     data = request.json
+    
+    if data.get('type') == 'generate_continuation':
+        return jsonify({
+            'continuation': '测试响应：角色们继续对话，剧情发展中...'
+        })
+    
     character_data = data.get('character', {})
     context = data.get('context', {})
     
-    # 创建角色对象
     character = Character(**character_data)
-    
-    # 创建智能体
     agent = Agent(character)
     
-    # 生成移动指令
     import asyncio
     movement = asyncio.run(agent.generate_movement(str(context)))
     
-    # 返回移动指令
     return jsonify({
         'movement': {
             'dx': movement[0] if movement else 0.0,
@@ -170,5 +252,10 @@ def agent_movement():
 import os
 
 if __name__ == '__main__':
+    print("=== Starting server ===")
+    print("Registered routes:")
+    for rule in app.url_map.iter_rules():
+        print(f"  {rule.rule} [{', '.join(rule.methods)}]")
+    print("=====================")
     port = int(os.environ.get('FLASK_PORT', 5001))
     app.run(host='0.0.0.0', port=port, debug=False)
